@@ -1,9 +1,13 @@
 package main
 
 import "core:fmt"
+import "core:os"
 import "core:time"
 import w "core:sys/windows"
 import "w2"
+
+// CONFIG/ARGS:
+g_all_monitors: bool
 
 is_key_down :: proc(key: w.INT) -> bool {
 	return bool(u16(w.GetAsyncKeyState(key)) & 0x8000)
@@ -11,6 +15,31 @@ is_key_down :: proc(key: w.INT) -> bool {
 
 bool_to_on_off_string :: proc(b: bool) -> string {
 	return "ON" if b else "OFF"
+}
+
+is_primary_monitor :: proc(path_info: w2.DISPLAYCONFIG_PATH_INFO) -> bool {
+	res: w.LONG
+
+	source_name: w2.DISPLAYCONFIG_SOURCE_DEVICE_NAME
+	source_name.header.type = .GET_SOURCE_NAME
+	source_name.header.size = size_of(w2.DISPLAYCONFIG_SOURCE_DEVICE_NAME)
+	source_name.header.adapterId = path_info.sourceInfo.adapterId
+	source_name.header.id = path_info.sourceInfo.id
+
+	if res = w2.DisplayConfigGetDeviceInfo(&source_name.header); res != i32(w.ERROR_SUCCESS) {
+		fmt.eprintln("DisplayConfigGetDeviceInfo failed", res)
+		return false
+	}
+
+	dev_mode: w.DEVMODEW
+	dev_mode.dmSize = size_of(w.DEVMODEW)
+
+	if !w.EnumDisplaySettingsW(cstring16(&source_name.viewGdiDeviceName[0]), w.ENUM_CURRENT_SETTINGS, &dev_mode) {
+		fmt.eprintln("EnumDisplaySettingsW failed.")
+		return false
+	}
+
+	return dev_mode.dmPosition.x == 0 && dev_mode.dmPosition.y == 0
 }
 
 toggle_hdr_state :: proc() {
@@ -36,6 +65,10 @@ toggle_hdr_state :: proc() {
 	// so there isn't a case when one changes to ON and another one to OFF and then the other way around.
 	// There can also be a config file with whitelisted displays.
 	for p, i in paths {
+		if !g_all_monitors && !is_primary_monitor(p) {
+			continue
+		}
+
 		color_info: w2.DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO
 		color_info.header.type = .GET_ADVANCED_COLOR_INFO
 		color_info.header.size = size_of(w2.DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO)
@@ -49,7 +82,7 @@ toggle_hdr_state :: proc() {
 
 		// Check if HDR is supported
 		if color_info.advancedColorSupported == 0 {
-			fmt.eprintln("Display", i, "does not support HDR.")
+			fmt.println("Display", i, "does not support HDR.")
 			continue
 		}
 
@@ -74,6 +107,14 @@ toggle_hdr_state :: proc() {
 }
 
 main :: proc() {
+	// Parse cmd line args
+	if len(os.args) > 1 {
+		arg := os.args[1]
+		if arg == "-all" {
+			g_all_monitors = true
+		}
+	}
+
 	Keys :: enum {
 		LWin,
 		LAlt,
